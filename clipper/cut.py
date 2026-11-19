@@ -58,6 +58,10 @@ def boundary_warnings(ranges, words):
         if not snapped:
             continue
         _, _, i0, i1 = snapped
+        gap = max((words[i + 1]['s'] - words[i]['e'] for i in range(i0, i1)), default=0)
+        if gap > 30:
+            warns.append(f'has {gap:.0f} s with no transcribed speech inside it (with a hybrid-scan '
+                         f'transcript this means it spans two highlight windows: keep it inside one)')
         prev, last = (words[i0 - 1] if i0 > 0 else None), words[i1]
         nxt = words[i1 + 1] if i1 + 1 < len(words) else None
         if prev and prev['w'][-1:] not in '.?!' and words[i0]['s'] - prev['e'] < 0.6:

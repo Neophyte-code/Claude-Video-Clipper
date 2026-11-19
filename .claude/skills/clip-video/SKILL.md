@@ -29,6 +29,18 @@ python run.py fetch "<youtube url or path to a video file>"
   `--cookies-from-browser chrome` (or firefox / edge). Ask the user which browser they use.
 - Non-English videos are detected automatically.
 
+**Long streams (over 3 h) use the hybrid scan automatically.** Instead of transcribing everything,
+it downloads the chat replay (YouTube, text only), scans chat spikes and voice-loudness peaks,
+and transcribes only the best highlight windows (about 8% of the stream, 20–90 min). Each window
+is saved as it finishes, so rerunning the same command after a crash resumes where it stopped.
+- **Twitch VODs:** yt-dlp can't get Twitch chat. Ask the user for a chat file from
+  TwitchDownloaderCLI (`chatdownload --id <vod id> -o chat.json`) and pass `--chat chat.json`.
+  Without chat it falls back to voice loudness only, which can miss quiet highlights.
+- Options: `--scan on|off` forces it on or off (use `on` for a shorter stream, `off` for a long
+  podcast where the best moments are calm), and `--budget 60` sets the minutes to transcribe.
+- In a hybrid transcript, clips must stay **inside one `## window` block**. The header shows why
+  the window was picked (`chat x4.2`, `voice +9 dB`). Text between windows was never transcribed.
+
 ## 2. Pick the moments (your job)
 Read `references/picking-moments.md` first, then read the **whole** `transcript.txt`.
 Choose the best 3–8 self-contained clips (hook → story → payoff, 25–60 s ideal), and write
