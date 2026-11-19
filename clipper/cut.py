@@ -7,13 +7,17 @@
 Downloads the video the first time (max 1080p). Snaps every range to whole words so nothing is
 cut mid-word, reframes each camera shot around the speaker's face, and writes
 clips/NN-title.mp4 plus clips/NN-title.json (timing, words, focus point) used by `edit`.
+
+Streams are handled automatically: wherever a facecam overlay is on screen (found every few
+seconds, so it is followed when it moves), the facecam goes on top and the gameplay below.
+Full-cam shots and normal videos get the usual face crop. Turn it off with --no-streamer.
 """
 import argparse
 import sys
 from pathlib import Path
 
 from .common import die, out_fps, ffmpeg, fmt_ts, load_json, probe, project_dir, save_json, slugify
-from .reframe import analyse_range, plan_shots, shot_filter
+from .reframe import analyse_range, analyse_streamer, plan_shots, shot_filter
 
 PAD_IN, PAD_OUT = 0.12, 0.30
 
@@ -72,7 +76,7 @@ def boundary_warnings(ranges, words):
     return warns
 
 
-def build_clip(video, info, clip, words, out_mp4, horizontal=False, split=None):
+def build_clip(video, info, clip, words, out_mp4, horizontal=False, split=None, streamer_top=None):
     src_w, src_h = info['width'], info['height']
     fps = out_fps(info.get('fps', 30))
     parts, inputs, chains, labels = [], [], [], []
@@ -94,7 +98,10 @@ def build_clip(video, info, clip, words, out_mp4, horizontal=False, split=None):
             shots = [{'a': 0, 'b': dur, 'mode': 'split', **split, 'focus': [540, split['top_h'] // 2]}]
             chains.append(shot_filter(f'{n}:v', shots[0], src_w, src_h, f'v{n}', fps))
         else:
-            shots = plan_shots(analyse_range(video, start, dur, src_w, src_h), src_w, src_h)
+            if streamer_top and src_w / src_h >= 0.75:
+                shots = analyse_streamer(video, start, dur, src_w, src_h, streamer_top)
+            else:
+                shots = plan_shots(analyse_range(video, start, dur, src_w, src_h), src_w, src_h)
             if len(shots) == 1:
                 chains.append(shot_filter(f'{n}:v', shots[0], src_w, src_h, f'v{n}', fps))
             else:
@@ -113,7 +120,8 @@ def build_clip(video, info, clip, words, out_mp4, horizontal=False, split=None):
                                'e': round(w['e'] - start + timeline, 3)})
         for sh in shots:
             shots_out.append({'t0': round(sh['a'] + timeline, 3), 't1': round(sh['b'] + timeline, 3),
-                              'mode': sh['mode'], 'focus': sh['focus']})
+                              'mode': sh['mode'], 'focus': sh['focus'],
+                              **({'cam': sh['cam']} if sh.get('cam') else {})})
         if timeline > 0:
             splices.append(round(timeline, 3))
         parts.append((start, end))
@@ -139,6 +147,10 @@ def main():
     ap.add_argument('--check', action='store_true', help='only check clip boundaries, cut nothing')
     ap.add_argument('--split', action='store_true',
                     help='streamer layout: facecam box on top, screen box below (set --cam/--screen)')
+    ap.add_argument('--no-streamer', dest='streamer', action='store_false',
+                    help='turn off automatic facecam detection (on by default: wherever a facecam '
+                         'overlay is found it goes on top, with the gameplay below)')
+    ap.add_argument('--streamer', action='store_true', default=True, help=argparse.SUPPRESS)
     ap.add_argument('--cam', default='0,330,864,672', help='facecam box in source px: x,y,w,h')
     ap.add_argument('--screen', default='740,70,900,900', help='screen box in source px: x,y,w,h')
     ap.add_argument('--top-h', type=int, default=840, help='height of the facecam panel (of 1920)')
@@ -187,7 +199,8 @@ def main():
         name = f'{cid:02d}-{slugify(clip.get("title", "clip"), 40)}'
         out = out_dir / f'{name}.mp4'
         print(f'-> clip {cid}: "{clip.get("title")}"  ranges={clip["ranges"]}')
-        meta = build_clip(video, info, clip, words, out, a.horizontal, split)
+        meta = build_clip(video, info, clip, words, out, a.horizontal, split,
+                          a.top_h // 2 * 2 if a.streamer and not split else None)
         if not meta:
             print('   ! skipped (no words in its ranges)')
             continue

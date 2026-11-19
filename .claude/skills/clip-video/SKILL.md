@@ -75,6 +75,11 @@ each camera shot around the speaker's face (9:16, 1080x1920), and writes `clips/
 Shots with no detectable face (slides, b-roll) get a blurred-background "fit" layout.
 Use `--horizontal` to keep 16:9, and `--clips 2,4` to redo only some.
 
+**Streams are automatic.** Wherever a facecam overlay is on screen, `cut` puts the streamer on
+top and the gameplay below. It checks every few seconds, so it follows the cam when it moves
+(menu vs gameplay, or a moved overlay). Full-cam shots and normal videos keep the face crop.
+Use `--no-streamer` only if a picture-in-picture video gets split by mistake.
+
 **These raw cuts are already postable.** If the user only wanted clips, stop here and report.
 
 ## 4. Brand colours for captions (quick, don't overthink)

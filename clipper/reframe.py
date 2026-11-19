@@ -83,6 +83,137 @@ def analyse_range(video, start, dur, src_w, src_h):
     return out
 
 
+# ---------------------------------------------------------------------------------------------
+# Streamer mode: find the facecam overlay in every shot, so the streamer always sits in the top
+# panel even when the overlay moves (menu vs gameplay scenes) or the stream cuts to full-cam.
+
+def _border(score, lo, hi, thresh):
+    """Strongest edge index in score[lo:hi] above thresh, or None."""
+    lo, hi = max(lo, 0), min(hi, len(score))
+    if hi - lo < 2:
+        return None
+    i = int(np.argmax(score[lo:hi])) + lo
+    return i if score[i] >= thresh else None
+
+
+def _cam_box(gray, face, thresh=10.0):
+    """The overlay rectangle (x, y, w, h) around a small face, found from the straight edges of the
+    overlay's border (the frame edge counts as a border). The top-left corner must show clear
+    edges; the bottom/right edges often blend into the game, so when they are faint the box is
+    completed as 16:9. Returns None if no box fits."""
+    Hs, Ws = gray.shape
+    fx, fy, fw, fh = face
+    gy = np.abs(np.diff(gray, axis=0))           # horizontal edges, row i = between i and i+1
+    gx = np.abs(np.diff(gray, axis=1))           # vertical edges
+    x_lo, x_hi = int(max(0, fx - 1.5 * fw)), int(min(Ws, fx + 2.5 * fw))
+    rows = np.percentile(gy[:, x_lo:x_hi], 25, axis=1)
+    top = _border(rows, int(fy - 4 * fh), int(fy - 0.2 * fh), thresh)
+    top = 0 if top is None and fy - 4 * fh <= 0 else (None if top is None else top + 1)
+    if top is None:
+        return None
+    cols = np.percentile(gx[top:int(min(Hs, fy + 2 * fh)), :], 25, axis=0)
+    left = _border(cols, int(fx - 6 * fw), int(fx - 0.2 * fw), thresh)
+    left = 0 if left is None and fx - 6 * fw <= 0 else (None if left is None else left + 1)
+    if left is None:
+        return None
+    # pick the width whose 16:9 box has the strongest right + bottom edges (frame edges count)
+    rows_ = np.append(rows, 255.0)
+    cols_ = np.append(cols, 255.0)
+    best, best_score = None, -1.0
+    for w in range(int(fx + 1.2 * fw - left), int(min(Ws - left, 0.55 * Ws)) + 1):
+        h = int(round(w * 9 / 16))
+        if top + h > Hs or top + h < fy + 1.1 * fh:
+            continue
+        r, b = left + w - 1, top + h - 1
+        sc = cols_[max(r - 1, 0):r + 2].max() + rows_[max(b - 1, 0):b + 2].max()
+        if sc > best_score:
+            best, best_score = (left, top, w, h), sc
+    if best is None or best_score < thresh or best[2] < 0.10 * Ws:
+        return None
+    return best
+
+
+def streamer_cam(cap, t0, t1, samples=7, max_face=0.16):
+    """Facecam overlay box in source px for this shot, or None. A small face counts as the
+    streamer only if it sits inside a bordered 16:9-ish box that stays put across the shot
+    (game characters move, the overlay doesn't)."""
+    boxes = []
+    for k in range(samples):
+        cap.set(cv2.CAP_PROP_POS_MSEC, (t0 + (t1 - t0) * (k + 0.5) / samples) * 1000)
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        h0, w0 = frame.shape[:2]
+        scale = 960 / w0
+        small = cv2.resize(frame, (960, int(h0 * scale)))
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        for f in _faces(small):
+            if f[3] / small.shape[0] > max_face:
+                continue
+            b = _cam_box(gray, f)
+            if b:
+                boxes.append(tuple(v / scale for v in b))
+    if not boxes:
+        return None
+    # cluster by centre; the streamer box is the one seen in the most samples
+    a = np.array(boxes)
+    centres = a[:, :2] + a[:, 2:] / 2
+    best = max(range(len(a)), key=lambda i: int((np.linalg.norm(centres - centres[i], axis=1) < 40).sum()))
+    near = np.linalg.norm(centres - centres[best], axis=1) < 40
+    if near.sum() < max(2, samples // 3):
+        return None
+    x, y, w, h = np.median(a[near], axis=0)
+    return [int(v) // 2 * 2 for v in (x, y, w, h)]
+
+
+def screen_box(src_w, src_h, top_h):
+    """Centre crop of the source that fills the bottom panel exactly."""
+    aspect = W / (H - top_h)
+    w = min(src_w, int(src_h * aspect))
+    h = min(src_h, int(w / aspect))
+    return [(src_w - w) // 4 * 2, (src_h - h) // 4 * 2, w // 2 * 2, h // 2 * 2]
+
+
+def analyse_streamer(video, start, dur, src_w, src_h, top_h, chunk=4.0):
+    """Shots for a stream VOD: each shot is 'split' (facecam found: cam on top, gameplay below),
+    else a normal face crop (full-cam shot), else 'fit'."""
+    shots = scene_cuts(video, start, dur)
+    cap = cv2.VideoCapture(str(video))
+    out = []
+    for a, b in shots:
+        # check the cam every few seconds, so a facecam that moves without a scene cut is followed
+        n = max(1, int(round((b - a) / chunk)))
+        edges = [a + (b - a) * k / n for k in range(n + 1)]
+        cams = [streamer_cam(cap, start + edges[k], start + edges[k + 1], samples=5) for k in range(n)]
+        if not any(cams):
+            out.append({'a': a, 'b': b, 'cam': None, 'face': face_in_shot(cap, start + a, start + b)})
+            continue
+        for k in range(n):          # a missed chunk inside a cam shot borrows the nearest found box
+            if not cams[k]:
+                cams[k] = next(cams[j] for j in sorted(range(n), key=lambda j: abs(j - k)) if cams[j])
+        for k in range(n):          # merge neighbouring chunks that show the cam in the same place
+            prev = out[-1] if out and out[-1]['cam'] and out[-1]['b'] == edges[k] else None
+            if prev and max(abs(p - q) for p, q in zip(prev['cam'], cams[k])) < 40:
+                prev['b'] = edges[k + 1]
+            else:
+                out.append({'a': edges[k], 'b': edges[k + 1], 'cam': cams[k], 'face': None})
+    cap.release()
+    # short shots with no cam (a missed detection mid-scene) reuse the neighbour's cam
+    for i, s in enumerate(out):
+        if not s['cam'] and s['b'] - s['a'] < 2.0:
+            nb = [out[j]['cam'] for j in (i - 1, i + 1) if 0 <= j < len(out) and out[j]['cam']]
+            if nb:
+                s['cam'] = nb[0]
+    plan = []
+    for s in out:
+        if s['cam']:
+            plan.append({**s, 'mode': 'split', 'screen': screen_box(src_w, src_h, top_h),
+                         'top_h': top_h, 'focus': [W // 2, top_h // 2]})
+        else:
+            plan += plan_shots([s], src_w, src_h)
+    return plan
+
+
 def crop_width(src_w, src_h):
     return min(src_w, int(src_h * 9 / 16) // 2 * 2)
 
