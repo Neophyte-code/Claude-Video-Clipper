@@ -130,6 +130,17 @@ def shot_filter(inp, shot, src_w, src_h, label, fps=FPS):
                 f"boxblur=30:3,eq=brightness=-0.08[{label}bb];"
                 f"[{label}f]scale={W}:-2:flags=lanczos[{label}ff];"
                 f"[{label}bb][{label}ff]overlay=0:(H-h)/2*0.85,{tail}[{label}]")
+    if shot['mode'] == 'split':
+        # streamer layout: facecam box on top, screen box below, stacked into one 1080x1920 frame
+        cx, cy, cw_, ch_ = shot['cam']
+        sx, sy, sw_, sh_ = shot['screen']
+        top = shot['top_h']
+        return (f"[{inp}]{trim},split[{label}c][{label}s];"
+                f"[{label}c]crop={cw_}:{ch_}:{cx}:{cy},scale={W}:{top}:force_original_aspect_ratio=increase:"
+                f"flags=lanczos,crop={W}:{top}[{label}ct];"
+                f"[{label}s]crop={sw_}:{sh_}:{sx}:{sy},scale={W}:{H - top}:force_original_aspect_ratio=increase:"
+                f"flags=lanczos,crop={W}:{H - top}[{label}st];"
+                f"[{label}ct][{label}st]vstack,{tail}[{label}]")
     cw = crop_width(src_w, src_h)
     return (f"[{inp}]{trim},crop={cw}:{src_h}:{shot['x0']}:0,scale={W}:{H}:flags=lanczos,"
             f"{tail}[{label}]")

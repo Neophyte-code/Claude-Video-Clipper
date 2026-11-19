@@ -68,7 +68,7 @@ def boundary_warnings(ranges, words):
     return warns
 
 
-def build_clip(video, info, clip, words, out_mp4, horizontal=False):
+def build_clip(video, info, clip, words, out_mp4, horizontal=False, split=None):
     src_w, src_h = info['width'], info['height']
     fps = out_fps(info.get('fps', 30))
     parts, inputs, chains, labels = [], [], [], []
@@ -86,6 +86,9 @@ def build_clip(video, info, clip, words, out_mp4, horizontal=False):
         if horizontal:
             chains.append(f'[{n}:v]fps={fps},setsar=1,format=yuv420p[v{n}]')
             shots = [{'a': 0, 'b': dur, 'mode': 'horizontal', 'focus': [src_w / 2, src_h * 0.4]}]
+        elif split:
+            shots = [{'a': 0, 'b': dur, 'mode': 'split', **split, 'focus': [540, split['top_h'] // 2]}]
+            chains.append(shot_filter(f'{n}:v', shots[0], src_w, src_h, f'v{n}', fps))
         else:
             shots = plan_shots(analyse_range(video, start, dur, src_w, src_h), src_w, src_h)
             if len(shots) == 1:
@@ -130,7 +133,14 @@ def main():
     ap.add_argument('--clips', default=None, help='comma list of clip ids, e.g. 1,3')
     ap.add_argument('--horizontal', action='store_true', help='keep the original 16:9 framing')
     ap.add_argument('--check', action='store_true', help='only check clip boundaries, cut nothing')
+    ap.add_argument('--split', action='store_true',
+                    help='streamer layout: facecam box on top, screen box below (set --cam/--screen)')
+    ap.add_argument('--cam', default='0,330,864,672', help='facecam box in source px: x,y,w,h')
+    ap.add_argument('--screen', default='740,70,900,900', help='screen box in source px: x,y,w,h')
+    ap.add_argument('--top-h', type=int, default=840, help='height of the facecam panel (of 1920)')
     a = ap.parse_args()
+    box = lambda s: [int(v) // 2 * 2 for v in s.split(',')]
+    split = {'cam': box(a.cam), 'screen': box(a.screen), 'top_h': a.top_h // 2 * 2} if a.split else None
 
     pdir = project_dir(a.project)
     project = load_json(pdir / 'project.json')
@@ -173,7 +183,7 @@ def main():
         name = f'{cid:02d}-{slugify(clip.get("title", "clip"), 40)}'
         out = out_dir / f'{name}.mp4'
         print(f'-> clip {cid}: "{clip.get("title")}"  ranges={clip["ranges"]}')
-        meta = build_clip(video, info, clip, words, out, a.horizontal)
+        meta = build_clip(video, info, clip, words, out, a.horizontal, split)
         if not meta:
             print('   ! skipped (no words in its ranges)')
             continue

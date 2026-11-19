@@ -2,7 +2,7 @@
 
     python run.py fetch "https://www.youtube.com/watch?v=..."
     python run.py fetch "C:/videos/my-podcast.mp4"
-    options: --model small.en|base.en|medium.en|small  --lang en|auto  --cookies-from-browser chrome
+    options: --model medium.en|small.en|base.en|small  --lang en|auto  --cookies-from-browser chrome
 
 Creates output/<slug>/ with project.json, source/audio.*, transcript/words.json and transcript.txt.
 Only the audio is downloaded here; the video is downloaded by `cut`, once clips are picked.
@@ -108,7 +108,8 @@ def transcribe(wav, model_name, lang, device):
     if lang != 'en' and model_name.endswith('.en'):
         model_name = model_name[:-3]
     print(f'-> transcribing with whisper "{model_name}" on {device} '
-          f'(roughly 1/5 of the video length on a laptop CPU; the first run also downloads the model) ...')
+          f'(small.en ~1/5, medium.en ~2/3 of the video length on a laptop CPU; '
+          f'the first run also downloads the model) ...')
     compute = 'int8' if device == 'cpu' else 'float16'
     model = WhisperModel(model_name, device=device, compute_type=compute,
                          cpu_threads=max(1, (os.cpu_count() or 4) - 1))
@@ -161,7 +162,7 @@ def write_transcript(pdir, words, project):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('source', help='YouTube URL or local video file')
-    ap.add_argument('--model', default='small.en', help='whisper model (default small.en)')
+    ap.add_argument('--model', default='medium.en', help='whisper model (default medium.en; small.en is ~3x faster)')
     ap.add_argument('--lang', default='auto', help='language code, or auto (default)')
     ap.add_argument('--device', default='cpu', help='cpu (default) or cuda')
     ap.add_argument('--cookies-from-browser', default=None, help='chrome / firefox / edge (if YouTube blocks)')

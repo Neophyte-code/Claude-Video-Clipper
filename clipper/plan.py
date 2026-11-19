@@ -228,9 +228,35 @@ def caption_groups(meta, upper=True, max_words=3, max_chars=15, max_dur=1.6):
 
 # ---------- sound effects ----------
 
-def sfx_cues(transitions, beats, duration, mode='auto', fps=FPS):
+def sfx_cues(transitions, beats, duration, mode='auto', fps=FPS, meta=None):
     if mode == 'none':
         return []
+    cues = _sfx_cues(transitions, beats, duration, mode, fps)
+    if mode == 'light' or not meta:
+        return cues
+    # minimal accents: a quiet pop on the first time each of up to 2 emphasis words is spoken,
+    # at least 5 s apart and away from the other cues
+    emph = {e.lower().strip('.,!?') for e in meta.get('emphasis', [])}
+    used = {(c['file'], 0) for c in cues}
+    for w in meta.get('words', []):
+        if sum(c['role'] == 'click' for c in cues) >= 2:
+            break
+        word = w['w'].lower().strip('.,!?"\'')
+        if word not in emph or w['s'] < 1.0 or any(abs(c['at'] - w['s']) < 5 for c in cues):
+            continue
+        emph.discard(word)
+        it = sfxlib.pick('click', 0.3, used)
+        if not it:
+            break
+        used.add((it['file'], it['variant']))
+        at = max(0.0, w['s'] - it['peak'])
+        cues.append({'file': it['file'], 'role': 'click', 'offset': it['start'],
+                     'length': round(min(it['length'], duration - at), 3), 'at': round(at, 3),
+                     'gain_db': -22, 'norm_db': it.get('norm_db', 0)})
+    return cues
+
+
+def _sfx_cues(transitions, beats, duration, mode, fps):
     cues, used = [], set()
 
     def add(role, peak_at, gain_db, prefer_len=None):
@@ -248,12 +274,12 @@ def sfx_cues(transitions, beats, duration, mode='auto', fps=FPS):
         cues.append({'file': it['file'], 'role': role, 'offset': round(offset, 3), 'length': round(length, 3),
                      'at': round(at, 3), 'gain_db': gain_db, 'norm_db': it.get('norm_db', 0)})
 
-    add('whoosh', OPEN_FRAMES / fps * 0.5, -15, prefer_len=0.9)          # opening zoom
+    add('whoosh', OPEN_FRAMES / fps * 0.5, -18, prefer_len=0.5)          # opening zoom
     if mode == 'light':
         return cues
     snap = next((t for t in transitions if t['kind'] == 'snap'), None)
     if snap:                                                             # whoosh on the emphasis zoom
-        add('whoosh', snap['t'] + SNAP_FRAMES / fps * 0.4, -17, prefer_len=0.9)
+        add('whoosh', snap['t'] + SNAP_FRAMES / fps * 0.4, -20, prefer_len=0.5)
     return cues
 
 
@@ -275,6 +301,6 @@ def build(meta, brand, opts):
             'size': opts.get('size', 96), 'y': opts.get('caption_y', 1270), 'outline': 8, 'uppercase': opts.get('uppercase', True),
         },
         'brand': brand,
-        'sfx': sfx_cues(transitions, beats, meta['duration'], opts.get('sfx', 'auto'), fps),
+        'sfx': sfx_cues(transitions, beats, meta['duration'], opts.get('sfx', 'auto'), fps, meta),
         'transitions': transitions,
     }
