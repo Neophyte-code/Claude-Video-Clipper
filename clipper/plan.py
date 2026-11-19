@@ -285,11 +285,30 @@ def _sfx_cues(transitions, beats, duration, mode, fps):
 
 # ---------- the plan ----------
 
+CAPTION_Y = 1270
+
+
+def place_on_seam(caps, meta, cam, fps):
+    """Streamer layout: put each caption on the seam between the facecam (top) and the gameplay
+    (below), following the zoom so it stays on the seam. Other shots keep the default height."""
+    shots = meta.get('shots', [])
+    for c in caps:
+        mid = (c['start'] + c['end']) / 2
+        shot = next((sh for sh in shots if sh['t0'] <= mid < sh['t1']), None)
+        if not shot or shot.get('mode') != 'split':
+            continue
+        seam = shot.get('top_h') or shot['focus'][1] * 2
+        f0, f1 = int(c['start'] * fps), max(int(c['start'] * fps) + 1, int(c['end'] * fps))
+        ys = [y + (seam - y) * s for s, _, y in cam[min(f0, len(cam) - 1):min(f1, len(cam))]] or [seam]
+        c['y'] = int(round(sum(ys) / len(ys)))
+
 def build(meta, brand, opts):
     fps = meta.get('fps', FPS)
     keys, cam, transitions, beats = build_camera(meta) if opts.get('zoom', True) else \
         ([], [[1.0, W / 2, H / 2]] * int(round(meta['duration'] * fps)), [], [(0, meta['duration'])])
     caps = caption_groups(meta, upper=opts.get('uppercase', True)) if opts.get('captions', True) else []
+    if opts.get('caption_y') is None:
+        place_on_seam(caps, meta, cam, fps)
     return {
         'fps': fps, 'width': W, 'height': H,
         'duration': meta['duration'], 'frames': len(cam),
@@ -298,7 +317,7 @@ def build(meta, brand, opts):
         'captions': caps,
         'caption_style': {
             'font': opts.get('font', 'Montserrat ExtraBold'), 'font_file': opts.get('font_file', 'Montserrat-ExtraBold.ttf'),
-            'size': opts.get('size', 96), 'y': opts.get('caption_y', 1270), 'outline': 8, 'uppercase': opts.get('uppercase', True),
+            'size': opts.get('size', 96), 'y': opts.get('caption_y') or CAPTION_Y, 'outline': 8, 'uppercase': opts.get('uppercase', True),
         },
         'brand': brand,
         'sfx': sfx_cues(transitions, beats, meta['duration'], opts.get('sfx', 'auto'), fps, meta),

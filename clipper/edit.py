@@ -124,7 +124,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                    f'\\t({a},{a + 1},\\alpha&H00&)\\t({a},{a + 110},0.6,\\fscy100)'
                    f'\\t({b},{b + 1},\\1c{col})}}')
             parts.append(tag + w['text'].replace('{', '(').replace('}', ')'))
-        text = f"{{\\pos({W // 2},{st['y']})}}" + ' '.join(parts)
+        text = f"{{\\pos({W // 2},{g.get('y', st['y'])})}}" + ' '.join(parts)
         events.append(f"Dialogue: 0,{t(g0)},{t(g['end'])},Cap,,0,0,0,,{text}")
     Path(path).write_text(head + '\n'.join(events) + '\n', encoding='utf-8')
 
@@ -221,7 +221,9 @@ def main():
     ap.add_argument('--no-captions', action='store_true')
     ap.add_argument('--sfx', default='auto', choices=['auto', 'light', 'none'])
     ap.add_argument('--no-upper', action='store_true', help='sentence case captions instead of UPPERCASE')
-    ap.add_argument('--caption-y', type=int, default=1270, help='caption centre line in px (0-1920)')
+    ap.add_argument('--caption-y', type=int, default=None,
+                    help='caption centre line in px (0-1920). Default 1270, or on the facecam/gameplay '
+                         'seam for streamer-layout shots')
     ap.add_argument('--size', type=int, default=96, help='caption font size in px')
     ap.add_argument('--out', default=None, help='output folder (default <project>/edited)')
     a = ap.parse_args()

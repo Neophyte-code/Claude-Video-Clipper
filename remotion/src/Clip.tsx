@@ -3,7 +3,7 @@ import {loadFont} from '@remotion/fonts';
 import {AbsoluteFill, Easing, OffthreadVideo, interpolate, staticFile, useCurrentFrame} from 'remotion';
 
 type Word = {text: string; s: number; e: number; emph?: boolean};
-type Group = {start: number; end: number; words: Word[]};
+type Group = {start: number; end: number; words: Word[]; y?: number};
 
 export type ClipProps = {
   src: string;
@@ -69,7 +69,7 @@ const Captions: React.FC<Pick<ClipProps, 'captions' | 'caption_style' | 'brand' 
           position: 'absolute',
           left: 60,
           right: 60,
-          top: st.y,
+          top: g.y ?? st.y,
           transform: 'translateY(-50%)',
           textAlign: 'center',
           fontFamily: `'${st.font}'`,

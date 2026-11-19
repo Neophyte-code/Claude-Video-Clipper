@@ -121,7 +121,8 @@ def build_clip(video, info, clip, words, out_mp4, horizontal=False, split=None, 
         for sh in shots:
             shots_out.append({'t0': round(sh['a'] + timeline, 3), 't1': round(sh['b'] + timeline, 3),
                               'mode': sh['mode'], 'focus': sh['focus'],
-                              **({'cam': sh['cam']} if sh.get('cam') else {})})
+                              **({'cam': sh['cam']} if sh.get('cam') else {}),
+                              **({'top_h': sh['top_h']} if sh.get('top_h') else {})})
         if timeline > 0:
             splices.append(round(timeline, 3))
         parts.append((start, end))
