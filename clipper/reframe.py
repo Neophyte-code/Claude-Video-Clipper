@@ -119,18 +119,23 @@ def _cam_box(gray, face, thresh=10.0):
     # pick the width whose 16:9 box has the strongest right + bottom edges (frame edges count)
     rows_ = np.append(rows, 255.0)
     cols_ = np.append(cols, 255.0)
-    best, best_score = None, -1.0
+    cands = []
     for w in range(int(fx + 1.2 * fw - left), int(min(Ws - left, 0.55 * Ws)) + 1):
         h = int(round(w * 9 / 16))
         if top + h > Hs or top + h < fy + 1.1 * fh:
             continue
         r, b = left + w - 1, top + h - 1
-        sc = cols_[max(r - 1, 0):r + 2].max() + rows_[max(b - 1, 0):b + 2].max()
-        if sc > best_score:
-            best, best_score = (left, top, w, h), sc
-    if best is None or best_score < thresh or best[2] < 0.10 * Ws:
+        cands.append((cols_[max(r - 1, 0):r + 2].max() + rows_[max(b - 1, 0):b + 2].max(), w, h))
+    if not cands:
         return None
-    return best
+    top_score = max(c[0] for c in cands)
+    if top_score < thresh:
+        return None
+    # the overlay's own border is the nearest clear edge; stronger edges further out are gameplay
+    _, w, h = next(c for c in cands if c[0] >= max(thresh, 0.6 * top_score))
+    if w < 0.10 * Ws:
+        return None
+    return (left, top, w, h)
 
 
 def streamer_cam(cap, t0, t1, samples=7, max_face=0.16):
@@ -198,6 +203,24 @@ def analyse_streamer(video, start, dur, src_w, src_h, top_h, chunk=4.0):
             else:
                 out.append({'a': edges[k], 'b': edges[k + 1], 'cam': cams[k], 'face': None})
     cap.release()
+    # within one clip the overlay rarely changes size: a box that shares its corner with a box
+    # seen for longer is the same overlay with a misread edge, so use the longer-seen box
+    seen = {}
+    for s in out:
+        if s['cam']:
+            key = tuple(s['cam'])
+            seen[key] = seen.get(key, 0) + (s['b'] - s['a'])
+    for s in out:
+        if s['cam']:
+            same_corner = [k for k in seen if abs(k[0] - s['cam'][0]) < 40 and abs(k[1] - s['cam'][1]) < 40]
+            s['cam'] = list(max(same_corner, key=lambda k: seen[k]))
+    merged = []
+    for s in out:              # re-merge neighbours that now show the same box
+        if merged and merged[-1]['cam'] and merged[-1]['cam'] == s['cam'] and merged[-1]['b'] == s['a']:
+            merged[-1]['b'] = s['b']
+        else:
+            merged.append(s)
+    out = merged
     # short shots with no cam (a missed detection mid-scene) reuse the neighbour's cam
     for i, s in enumerate(out):
         if not s['cam'] and s['b'] - s['a'] < 2.0:
