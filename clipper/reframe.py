@@ -198,6 +198,27 @@ def screen_box(src_w, src_h, top_h):
     return [(src_w - w) // 4 * 2, (src_h - h) // 4 * 2, w // 2 * 2, h // 2 * 2]
 
 
+def _face_in_box(cap, t0, t1, box, samples=5):
+    """True if a face shows inside source box (x, y, w, h) in most sampled frames of [t0, t1]."""
+    x, y, w, h = (int(v) for v in box)
+    hits = 0
+    for k in range(samples):
+        cap.set(cv2.CAP_PROP_POS_MSEC, (t0 + (t1 - t0) * (k + 0.5) / samples) * 1000)
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        crop = frame[y:y + h, x:x + w]
+        if crop.size and _faces(cv2.resize(crop, (crop.shape[1] * 2, crop.shape[0] * 2))):
+            hits += 1
+    return hits >= max(2, (samples + 1) // 2)
+
+
+def fit_top_h(cam, max_h, min_h=640):
+    """Facecam panel height that matches the cam's own shape, so the whole cam shows and it is
+    upscaled as little as possible (cropping a wide cam to a tall panel magnifies it more)."""
+    return int(min(max_h, max(min_h, W * cam[3] / cam[2]))) // 2 * 2
+
+
 def analyse_streamer(video, start, dur, src_w, src_h, top_h, chunk=4.0):
     """Shots for a stream VOD: each shot is 'split' (facecam found: cam on top, gameplay below),
     else a normal face crop (full-cam shot), else 'fit'."""
@@ -246,11 +267,30 @@ def analyse_streamer(video, start, dur, src_w, src_h, top_h, chunk=4.0):
             nb = [out[j]['cam'] for j in (i - 1, i + 1) if 0 <= j < len(out) and out[j]['cam']]
             if nb:
                 s['cam'] = nb[0]
+    # longer shots with no cam: if the clip's known cam box still holds a face, the overlay is
+    # there and the border detection just missed it (e.g. gameplay edges lining up with it)
+    known = sorted(seen, key=lambda k: -seen[k])
+    if known:
+        cap = cv2.VideoCapture(str(video))
+        for s in out:
+            if not s['cam']:
+                s['cam'] = next((list(k) for k in known if _face_in_box(cap, start + s['a'], start + s['b'], k)), None)
+                if s['cam']:
+                    s['face'] = None
+        cap.release()
+        merged = []
+        for s in out:
+            if merged and merged[-1]['cam'] and merged[-1]['cam'] == s['cam'] and merged[-1]['b'] == s['a']:
+                merged[-1]['b'] = s['b']
+            else:
+                merged.append(s)
+        out = merged
     plan = []
     for s in out:
         if s['cam']:
-            plan.append({**s, 'mode': 'split', 'screen': screen_box(src_w, src_h, top_h),
-                         'top_h': top_h, 'focus': [W // 2, top_h // 2]})
+            th = fit_top_h(s['cam'], top_h)
+            plan.append({**s, 'mode': 'split', 'screen': screen_box(src_w, src_h, th),
+                         'top_h': th, 'focus': [W // 2, th // 2]})
         else:
             plan += plan_shots([s], src_w, src_h)
     return plan
@@ -290,9 +330,10 @@ def plan_shots(shots, src_w, src_h, min_fit=1.0):
     return plan
 
 
-CAM_CLEAN = 'hqdn3d=1.5:1.5:4:4'           # light denoise before a big upscale
-CAM_SHARPEN = 'unsharp=5:5:0.9:5:5:0'      # restore edge detail after the upscale (luma only)
-SHARPEN = 'unsharp=5:5:0.35:5:5:0'         # gentle sharpening for 1:1 / mild-upscale panels
+CAM_CLEAN = 'hqdn3d=1.5:1.5:4:4'           # light denoise before a big upscale (kills block noise)
+# contrast-adaptive sharpening restores detail without halos, then a fine unsharp crisps edges
+CAM_SHARPEN = 'cas=0.7,unsharp=3:3:0.5:3:3:0'
+SHARPEN = 'cas=0.4'                        # gentle sharpening for 1:1 / mild-upscale panels
 
 
 def shot_filter(inp, shot, src_w, src_h, label, fps=FPS):

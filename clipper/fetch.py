@@ -112,6 +112,17 @@ def to_wav16k(src, dst):
     return dst
 
 
+def voice_wav(wav):
+    """Copy of the 16 kHz wav cleaned up for speech recognition: rumble and hiss cut, noise
+    reduced, loudness evened out so quiet lines under loud game/music audio still get heard.
+    The raw wav is kept for the loudness scan."""
+    dst = wav.with_name(wav.stem + '_voice.wav')
+    if not dst.exists():
+        ffmpeg('-i', wav, '-af', 'highpass=f=120,lowpass=f=6000,afftdn=nf=-25,dynaudnorm=f=150:g=15',
+               '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', dst)
+    return dst
+
+
 def detect_language(audio):
     from faster_whisper import WhisperModel
     m = WhisperModel('tiny', device='cpu', compute_type='int8')
@@ -136,20 +147,30 @@ def transcribe(wav, model_name, lang, device):
 
 
 def load_pipe(model_name, device, threads=None):
-    from faster_whisper import BatchedInferencePipeline, WhisperModel
+    from faster_whisper import WhisperModel
     compute = 'int8' if device == 'cpu' else 'float16'
-    model = WhisperModel(model_name, device=device, compute_type=compute,
-                         cpu_threads=threads or max(1, (os.cpu_count() or 4) - 1))
-    # batched inference: ~2x faster than sequential on CPU with the same words (benchmarked)
-    return BatchedInferencePipeline(model=model)
+    # sequential, not BatchedInferencePipeline: batching needs a VAD pre-cut, and on streams the
+    # VAD drops shouted/overlapped speech under game audio (lost ~60% of the words in testing)
+    return WhisperModel(model_name, device=device, compute_type=compute,
+                        cpu_threads=threads or max(1, (os.cpu_count() or 4) - 1))
 
 
 def transcribe_array(pipe, audio, lang, offset=0.0, progress=True):
-    segments, info = pipe.transcribe(audio, language=lang, batch_size=8, beam_size=1, word_timestamps=True)
+    # no VAD (it cuts real speech under loud backgrounds); beam 5 for accuracy; not conditioning
+    # on previous text stops one misheard line from snowballing; strict no-speech/log-prob
+    # thresholds skip silent stretches instead of hallucinating text into them
+    segments, info = pipe.transcribe(audio, language=lang, beam_size=5, word_timestamps=True,
+                                     vad_filter=False, condition_on_previous_text=False,
+                                     no_speech_threshold=0.8, log_prob_threshold=-1.5)
     words, total, last_print = [], info.duration or 1, time.time()
     for seg in segments:
         for w in seg.words or []:
             text = w.word.strip()
+            # whisper splits contractions into tokens ("y" + "'all"): glue them back into one word
+            if text and words and not w.word.startswith(' ') and text[0] in "'’":
+                words[-1].update({'w': words[-1]['w'] + text, 'e': round(w.end + offset, 3),
+                                  'p': round(min(words[-1]['p'], w.probability), 3)})
+                continue
             if text:
                 words.append({'w': text, 's': round(w.start + offset, 3), 'e': round(w.end + offset, 3),
                               'p': round(w.probability, 3)})
@@ -291,10 +312,10 @@ def main():
             print(f"-> {len(windows)} highlight windows, {fmt_ts(st['seconds_selected'])} of "
                   f"{fmt_ts(st['seconds_scanned'])} to transcribe "
                   f"({st['seconds_selected'] / max(1, st['seconds_scanned']):.0%})", flush=True)
-            words, lang = transcribe_windows(wav, windows, a.model, a.lang, a.device,
+            words, lang = transcribe_windows(voice_wav(wav), windows, a.model, a.lang, a.device,
                                              pdir / 'transcript' / 'windows')
         else:
-            words, lang = transcribe(wav, a.model, a.lang, a.device)
+            words, lang = transcribe(voice_wav(wav), a.model, a.lang, a.device)
         if not words:
             die('no speech found in this video')
         project['language'] = lang

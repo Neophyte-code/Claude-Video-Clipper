@@ -1,6 +1,6 @@
 # The simple edit: how it works and how to change it
 
-The edit is deliberately simple: clean zooms, readable captions, and a few quiet sound effects.
+The edit is deliberately simple: a steady frame (zooms only with `--zoom`), readable captions, and a few quiet sound effects.
 No flashy transitions, emojis or motion graphics.
 
 ## Where things live
@@ -19,7 +19,7 @@ No flashy transitions, emojis or motion graphics.
 - **"Bigger/smaller captions"**: `--size` (96 by default).
 - **"Not all caps"**: `--no-upper`.
 - **"No sound effects" / "only one"**: `--sfx none` / `--sfx light`.
-- **"Less zooming"**: `--no-zoom` for none, or raise the 2.8 s minimum in `beat_bounds`.
+- **"Zooms"**: off by default; `--zoom` turns them on. For fewer, raise the 2.8 s minimum in `beat_bounds`.
 - **"Use my own sounds"**: drop files into `assets/sfx/` with `whoosh`, `hit` or `click`
   in the file name. They're scanned automatically (files that hold several sounds are split at
   the silences).

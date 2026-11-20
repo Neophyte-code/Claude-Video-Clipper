@@ -1,10 +1,10 @@
-"""Step 4 (optional): a simple, clean edit of each cut clip: smooth zooms, word-by-word captions
+"""Step 4 (optional): a simple, clean edit of each cut clip: word-by-word captions (zooms optional)
 in the video's brand colours, and 1-2 subtle whooshes. Loudness normalised for phones.
 
     python run.py edit <project>                         # every clip, python engine
     python run.py edit <project> --clips 2               # one clip
     python run.py edit <project> --engine remotion       # same edit drawn by Remotion (python install.py --remotion)
-    options: --no-zoom  --no-captions  --sfx auto|light|none  --no-upper  --caption-y 1270  --size 96
+    options: --zoom  --no-captions  --sfx auto|light|none  --no-upper  --caption-y 1270  --size 96
 
 Writes edited/NN-title.mp4 (+ .srt captions file for platforms that want one).
 """
@@ -112,21 +112,30 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return f'{h}:{m:02d}:{s:02d}.{cs:02d}'
     events = []
     fps = plan['fps']
+    clean = lambda s: s.replace('{', '(').replace('}', ')')
     for g in plan['captions']:
         g0 = g['start'] - 1 / fps
+        pos = f"\\pos({W // 2},{g.get('y', st['y'])})"
+        if g.get('tag'):
+            # expression tag (*SCREAMS*): smaller italic, accent colour, soft fade + slight tilt
+            size = int(st['size'] * 0.75)
+            text = (f"{{{pos}\\i1\\fs{size}\\1c{accent}\\frz-4\\fscx80\\fscy80\\fad(120,150)"
+                    f"\\t(0,160,0.5,\\fscx100\\fscy100)}}{clean(g['words'][0]['text'])}")
+            events.append(f"Dialogue: 1,{t(g0)},{t(g['end'])},Cap,,0,0,0,,{text}")
+            continue
+        # the whole line bounces in at once (70% -> 112% -> 100%), so it stays centred and steady;
+        # the word being spoken lights up in the accent colour, emphasis words stay accented
         parts = []
         for i, w in enumerate(g['words']):
             a = max(0, int((w['s'] - 1 / fps - g0) * 1000))
             nxt = g['words'][i + 1]['s'] if i + 1 < len(g['words']) else None
             b = int(((nxt if nxt is not None else g['end'] + 1) - g0) * 1000)
             col = accent if w.get('emph') else white
-            # hidden until spoken, then pops up (vertical squash -> full + fade), active word in accent colour
-            tag = (f'{{\\alpha&HFF&\\fscy60\\1c{accent}'
-                   f'\\t({a},{a + 1},\\alpha&H00&)\\t({a},{a + 110},0.6,\\fscy100)'
-                   f'\\t({b},{b + 1},\\1c{col})}}')
-            parts.append(tag + w['text'].replace('{', '(').replace('}', ')'))
-        text = f"{{\\pos({W // 2},{g.get('y', st['y'])})}}" + ' '.join(parts)
-        events.append(f"Dialogue: 0,{t(g0)},{t(g['end'])},Cap,,0,0,0,,{text}")
+            tag = f'{{\\1c{col}\\t({a},{a + 1},\\1c{accent})\\t({b},{b + 1},\\1c{col})}}'
+            parts.append(tag + clean(w['text']))
+        anim = (f"{{{pos}\\fscx70\\fscy70\\fad(60,80)"
+                f"\\t(0,110,0.7,\\fscx112\\fscy112)\\t(110,200,1.4,\\fscx100\\fscy100)}}")
+        events.append(f"Dialogue: 0,{t(g0)},{t(g['end'])},Cap,,0,0,0,,{anim}" + ' '.join(parts))
     Path(path).write_text(head + '\n'.join(events) + '\n', encoding='utf-8')
 
 
@@ -218,7 +227,10 @@ def main():
     ap.add_argument('project')
     ap.add_argument('--clips', default=None)
     ap.add_argument('--engine', default='python', choices=['python', 'remotion'])
-    ap.add_argument('--no-zoom', action='store_true')
+    # zooms are off by default (user preference: a steady frame); --zoom brings them back
+    ap.add_argument('--zoom', dest='zoom', action='store_true', default=False,
+                    help='add the punch-in / zoom-out camera moves (off by default)')
+    ap.add_argument('--no-zoom', dest='zoom', action='store_false', help=argparse.SUPPRESS)
     ap.add_argument('--no-captions', action='store_true')
     ap.add_argument('--sfx', default='auto', choices=['auto', 'light', 'none'])
     ap.add_argument('--no-upper', action='store_true', help='sentence case captions instead of UPPERCASE')
@@ -243,7 +255,7 @@ def main():
     from .cut import ensure_video
     brand = brandlib.resolve(pdir, ensure_video(pdir, load_json(pdir / 'project.json')))
     print(f"-> brand colours: accent {brand['accent']} ({brand['source']})")
-    opts = {'zoom': not a.no_zoom, 'captions': not a.no_captions, 'sfx': a.sfx,
+    opts = {'zoom': a.zoom, 'captions': not a.no_captions, 'sfx': a.sfx,
             'uppercase': not a.no_upper, 'caption_y': a.caption_y, 'size': a.size}
     picks = (load_json(pdir / 'clips.json') or {}).get('clips', [])
     done = []
@@ -252,8 +264,9 @@ def main():
         if want and meta['id'] not in want:
             continue
         pick = next((c for c in picks if int(c.get('id', 0)) == meta['id']), {})
-        if 'sfx' in pick:
-            meta['sfx'] = pick['sfx']
+        for key in ('sfx', 'fix', 'tags'):       # editor's latest choices in clips.json win
+            if key in pick:
+                meta[key] = pick[key]
         clip_mp4 = clips_dir / meta['file']
         out = out_dir / meta['file']
         t0 = time.time()

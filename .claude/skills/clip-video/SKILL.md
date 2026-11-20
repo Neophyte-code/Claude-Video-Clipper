@@ -105,13 +105,23 @@ awkward), `bone-crack` (pain, cringe), `punch` (hit, comeback). Use 1–2 per cl
 last 1–2 s, where a long sound gets cut off. Use `"sfx": []` for none. They are mixed quietly under
 the voice automatically.
 
+## 4c. Caption fixes and expression tags
+- **Misheard words:** if the user (or a clear repeat elsewhere in the video) shows a caption word
+  is wrong, add `"fix": [{"from": "give me bed", "to": "give me banned"}]` to the clip. Only fix
+  what you are sure of; never invent lines.
+- **Expression tags** (`*SCREAMS*`, `*SIGHS*`, `*LAUGHS*`, `*SMIRKS*`, `*DISGUSTED*`): run
+  `python run.py sounds <project> --clip N` to list wordless screams/shouts and soft sounds, check
+  the facecam at those times (extract a frame with ffmpeg), and add the real ones:
+  `"tags": [{"at": 10.4, "text": "SCREAMS", "dur": 2.8}]` (source seconds). Visual reactions
+  in long silent stretches can get a tag too. Keep it to 1–4 per clip.
+
 ## 5. Simple edit (optional, recommended)
 ```
 python run.py edit <project>
 ```
 For each clip this adds:
-- **Zooms**: it opens on a quick zoom-out, then alternates wide and punched-in framing about
-  every 3–5 s on sentence ends, with one or two smooth emphasis zooms and a slow push in between.
+- **No zooms by default**: the frame stays steady (the user prefers it). Only if asked, add
+  `--zoom` for the opening zoom-out and punch-ins every 3–5 s around the face.
   It always scales around the face. Camera cuts and splices get a framing change, which hides
   the jump.
 - **Captions**: 1–3 words at a time, bold, popping in word by word. The spoken word lights up in
@@ -120,7 +130,7 @@ For each clip this adds:
 - **Sound**: at most 2 subtle whooshes: one on the opening zoom and one on an emphasis zoom. The voice is lightly compressed, and the
   whole mix is normalised to -14 LUFS.
 
-Options: `--sfx light|none`, `--no-zoom`, `--no-captions`, `--no-upper` (sentence case),
+Options: `--sfx light|none`, `--zoom`, `--no-captions`, `--no-upper` (sentence case),
 `--caption-y 1270` (higher number = lower on screen), `--size 96`, `--engine remotion`.
 Read `references/editing.md` if the user wants a different look.
 
