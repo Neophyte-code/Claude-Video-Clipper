@@ -96,6 +96,15 @@ the emphasis words. Choose the accent like this:
    looks off (e.g. muddy brown or near-grey), override it with a clean colour from the printed
    palette or with `#FFD60A`.
 
+## 4b. Meme sound effects (your pick, 1–3 per clip)
+Add an `"sfx"` list to each clip in clips.json. Put each sound on the exact words (as spoken) where it lands
+the joke: `"sfx": [{"word": "bad guy", "sound": "vine-boom"}]`. Sounds: `vine-boom` (punchline,
+shock), `among-us` (sus / "I'm the bad guy" reveal), `anime-wow` (amazement), `rizz` (flirting),
+`romance` (love moment), `capcut-explosion` (overreaction), `fart` / `fart-button` (gross or
+awkward), `bone-crack` (pain, cringe), `punch` (hit, comeback). Use 1–2 per clip, and avoid the
+last 1–2 s, where a long sound gets cut off. Use `"sfx": []` for none. They are mixed quietly under
+the voice automatically.
+
 ## 5. Simple edit (optional, recommended)
 ```
 python run.py edit <project>

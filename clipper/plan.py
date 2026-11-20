@@ -234,6 +234,8 @@ def sfx_cues(transitions, beats, duration, mode='auto', fps=FPS, meta=None):
     cues = _sfx_cues(transitions, beats, duration, mode, fps)
     if mode == 'light' or not meta:
         return cues
+    memes = meme_cues(meta, duration, cues)
+    cues = [c for c in cues if not any(abs(c['at'] - m['at']) < 0.8 for m in memes)] + memes
     # minimal accents: a quiet pop on the first time each of up to 2 emphasis words is spoken,
     # at least 5 s apart and away from the other cues
     emph = {e.lower().strip('.,!?') for e in meta.get('emphasis', [])}
@@ -242,7 +244,8 @@ def sfx_cues(transitions, beats, duration, mode='auto', fps=FPS, meta=None):
         if sum(c['role'] == 'click' for c in cues) >= 2:
             break
         word = w['w'].lower().strip('.,!?"\'')
-        if word not in emph or w['s'] < 1.0 or any(abs(c['at'] - w['s']) < 5 for c in cues):
+        if word not in emph or w['s'] < 1.0 or any(abs(c['at'] - w['s']) < (5 if c['role'] != 'meme' else 2.5)
+                                                    for c in cues):
             continue
         emph.discard(word)
         it = sfxlib.pick('click', 0.3, used)
@@ -253,6 +256,63 @@ def sfx_cues(transitions, beats, duration, mode='auto', fps=FPS, meta=None):
         cues.append({'file': it['file'], 'role': 'click', 'offset': it['start'],
                      'length': round(min(it['length'], duration - at), 3), 'at': round(at, 3),
                      'gain_db': -22, 'norm_db': it.get('norm_db', 0)})
+    return cues
+
+
+MEME_LEVEL_DB = -21     # loudest 300 ms of a meme sound, in dBFS before the final mix: ~9 dB under speech
+MEME_MAX_LEN, MEME_MAX = 2.5, 3
+
+
+def _norm(t):
+    return ''.join(ch for ch in t.lower() if ch.isalnum() or ch == "'")
+
+
+def find_phrase(words, phrase):
+    """Index of the first word of `phrase` in the clip's words, or None."""
+    target = [_norm(t) for t in phrase.split() if _norm(t)]
+    toks = [_norm(w['w']) for w in words]
+    for i in range(len(toks) - len(target) + 1):
+        if toks[i:i + len(target)] == target:
+            return i
+    return None
+
+
+def meme_cues(meta, duration, existing):
+    """Meme reaction sounds: the ones Claude picked in clips.json ("sfx"), each on its word.
+    With no picks, one vine boom lands on the last emphasis word (the punchline)."""
+    lib = sfxlib.memes()
+    if not lib:
+        return []
+    words = meta.get('words', [])
+    picks = meta.get('sfx')
+    if picks is None:
+        emph = {e.lower().strip('.,!?') for e in meta.get('emphasis', [])}
+        last = next((w for w in reversed(words) if w['w'].lower().strip('.,!?"\'') in emph), None)
+        picks = [{'word': last['w'], 'sound': 'vine-boom', '_at': last['s']}] if last else []
+    cues = []
+    for p in picks[:MEME_MAX]:
+        it = lib.get(p.get('sound', ''))
+        if not it:
+            print(f"   ! sfx: unknown sound {p.get('sound')!r} (have: {', '.join(sorted(lib))})")
+            continue
+        at = p.get('_at')
+        if at is None:
+            i = find_phrase(words, p.get('word', ''))
+            if i is None:
+                print(f"   ! sfx: word {p.get('word')!r} not found in clip {meta.get('id')}")
+                continue
+            at = words[i]['e'] if p.get('on') == 'end' else words[i]['s']
+        # short hits land their peak on the word; longer stings (anime wow, romance) start on it
+        start = max(0.0, at - (it['peak'] if it['peak'] <= 0.5 else 0.0))
+        if any(abs(c['at'] - start) < 1.5 for c in cues):
+            continue
+        length = round(min(it['length'], MEME_MAX_LEN, duration - start), 3)
+        if length < min(it['length'], MEME_MAX_LEN, 0.6):
+            print(f"   ! sfx: {p['sound']} on {p.get('word')!r} is cut off by the clip end, skipped")
+            continue
+        cues.append({'file': it['file'], 'role': 'meme', 'name': p['sound'], 'offset': it['start'],
+                     'length': length, 'at': round(start, 3), 'gain_db': MEME_LEVEL_DB,
+                     'norm_db': -it['loud_db'], 'fade': 0.35 if it['length'] > MEME_MAX_LEN else 0.06})
     return cues
 
 

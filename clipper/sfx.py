@@ -83,6 +83,49 @@ def scan():
     return cat
 
 
+# ---------- meme sounds (assets/sfx/meme/meme-<name>.mp3) ----------
+# Short reaction sounds (vine boom, bone crack, rizz...). Claude picks them per clip in clips.json
+# ("sfx": [{"word": "...", "sound": "vine-boom"}]); they are levelled by their loudest moment so
+# every one sits at the same quiet level under the voice, whatever its source loudness.
+
+MEME_DIR = SFX_DIR / 'meme'
+MEME_CATALOG = MEME_DIR / 'catalog.json'
+
+
+def _meme_info(path):
+    x = decode(path)
+    hop, win = SR // 100, SR // 10 * 3                     # 10 ms hop, 300 ms loudness window
+    if len(x) < hop:
+        return None
+    n = len(x) // hop
+    rms = np.sqrt(np.mean(x[:n * hop].reshape(n, hop) ** 2, axis=1) + 1e-12)
+    on = np.nonzero(20 * np.log10(rms / rms.max()) > -40)[0]
+    start = on[0] / 100 if len(on) else 0.0
+    end = (on[-1] + 1) / 100 if len(on) else n / 100
+    k = max(1, win // hop)
+    loud = np.convolve(rms ** 2, np.ones(k) / k, mode='same') if n >= k else rms ** 2
+    pk = int(np.argmax(rms))
+    return {'start': round(start, 2), 'length': round(end - start, 2),
+            'peak': round(max(0.0, pk / 100 - start), 2),
+            'loud_db': round(10 * np.log10(loud.max() + 1e-12), 2)}
+
+
+def memes():
+    """{name: info} for every meme sound, cached until the folder changes."""
+    files = sorted(p for p in MEME_DIR.iterdir() if p.suffix.lower() in EXTS) if MEME_DIR.exists() else []
+    sig = [[p.name, p.stat().st_size] for p in files]
+    cat = load_json(MEME_CATALOG)
+    if cat and cat.get('sig') == sig:
+        return cat['items']
+    items = {}
+    for p in files:
+        info = _meme_info(p)
+        if info:
+            items[p.stem.removeprefix('meme-')] = {'file': f'meme/{p.name}', **info}
+    save_json(MEME_CATALOG, {'sig': sig, 'items': items})
+    return items
+
+
 def pick(role, prefer_len=None, exclude=()):
     """Choose a sound of a role, preferring a length close to prefer_len (seconds)."""
     items = [i for i in scan()['items'] if i['role'] == role and (i['file'], i['variant']) not in exclude]

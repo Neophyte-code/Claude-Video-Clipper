@@ -41,7 +41,8 @@ def mix_audio(clip_mp4, cues, out_wav, duration):
         vol = c['gain_db'] + c.get('norm_db', 0)
         chains.append(f"[{k}:a]atrim=start={c['offset']:.3f}:duration={c['length']:.3f},asetpts=PTS-STARTPTS,"
                       f"aresample=48000,aformat=channel_layouts=stereo,volume={vol:.2f}dB,"
-                      f"afade=t=out:st={max(0, c['length'] - 0.06):.3f}:d=0.06,adelay={delay}|{delay}[s{k}]")
+                      f"afade=t=out:st={max(0, c['length'] - c.get('fade', 0.06)):.3f}:d={c.get('fade', 0.06)},"
+                      f"adelay={delay}|{delay}[s{k}]")
         labels.append(f'[s{k}]')
     chains.append(''.join(labels) + f'amix=inputs={len(labels)}:normalize=0:duration=first,'
                   f'loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,atrim=0:{duration:.3f}[out]')
@@ -244,11 +245,15 @@ def main():
     print(f"-> brand colours: accent {brand['accent']} ({brand['source']})")
     opts = {'zoom': not a.no_zoom, 'captions': not a.no_captions, 'sfx': a.sfx,
             'uppercase': not a.no_upper, 'caption_y': a.caption_y, 'size': a.size}
+    picks = (load_json(pdir / 'clips.json') or {}).get('clips', [])
     done = []
     for mpath in metas:
         meta = load_json(mpath)
         if want and meta['id'] not in want:
             continue
+        pick = next((c for c in picks if int(c.get('id', 0)) == meta['id']), {})
+        if 'sfx' in pick:
+            meta['sfx'] = pick['sfx']
         clip_mp4 = clips_dir / meta['file']
         out = out_dir / meta['file']
         t0 = time.time()
@@ -261,7 +266,7 @@ def main():
         if plan['captions']:
             write_srt(plan, out.with_suffix('.srt'))
         wav.unlink(missing_ok=True)
-        sfx = ', '.join(f"{c['role']}@{c['at'] + 0:.1f}s" for c in plan['sfx']) or 'none'
+        sfx = ', '.join(f"{c.get('name', c['role'])}@{c['at'] + 0:.1f}s" for c in plan['sfx']) or 'none'
         print(f"   ok {out.name}  zooms:{len(plan['transitions'])}  captions:{len(plan['captions'])}  "
               f"sfx: {sfx}  ({time.time() - t0:.0f}s)")
         done.append(out)

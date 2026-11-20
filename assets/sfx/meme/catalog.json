@@ -1,0 +1,116 @@
+{
+  "sig": [
+    [
+      "meme-among-us.mp3",
+      99894
+    ],
+    [
+      "meme-anime-wow.mp3",
+      67637
+    ],
+    [
+      "meme-bone-crack.mp3",
+      17900
+    ],
+    [
+      "meme-capcut-explosion.mp3",
+      52167
+    ],
+    [
+      "meme-fart-button.mp3",
+      5997
+    ],
+    [
+      "meme-fart.mp3",
+      1690
+    ],
+    [
+      "meme-punch.mp3",
+      25423
+    ],
+    [
+      "meme-rizz.mp3",
+      77462
+    ],
+    [
+      "meme-romance.mp3",
+      93933
+    ],
+    [
+      "meme-vine-boom.mp3",
+      21230
+    ]
+  ],
+  "items": {
+    "among-us": {
+      "file": "meme/meme-among-us.mp3",
+      "start": 0.22,
+      "length": 3.99,
+      "peak": 0.95,
+      "loud_db": -11.57
+    },
+    "anime-wow": {
+      "file": "meme/meme-anime-wow.mp3",
+      "start": 0.17,
+      "length": 3.61,
+      "peak": 0.17,
+      "loud_db": -12.69
+    },
+    "bone-crack": {
+      "file": "meme/meme-bone-crack.mp3",
+      "start": 0.12,
+      "length": 0.8,
+      "peak": 0.21,
+      "loud_db": -19.36
+    },
+    "capcut-explosion": {
+      "file": "meme/meme-capcut-explosion.mp3",
+      "start": 0.04,
+      "length": 2.37,
+      "peak": 0.01,
+      "loud_db": -9.01
+    },
+    "fart-button": {
+      "file": "meme/meme-fart-button.mp3",
+      "start": 0.02,
+      "length": 0.31,
+      "peak": 0.06,
+      "loud_db": -10.24
+    },
+    "fart": {
+      "file": "meme/meme-fart.mp3",
+      "start": 0.05,
+      "length": 0.22,
+      "peak": 0.04,
+      "loud_db": -13.79
+    },
+    "punch": {
+      "file": "meme/meme-punch.mp3",
+      "start": 0.36,
+      "length": 0.5,
+      "peak": 0.06,
+      "loud_db": -3.14
+    },
+    "rizz": {
+      "file": "meme/meme-rizz.mp3",
+      "start": 0.19,
+      "length": 1.34,
+      "peak": 0.09,
+      "loud_db": -4.24
+    },
+    "romance": {
+      "file": "meme/meme-romance.mp3",
+      "start": 0.0,
+      "length": 5.81,
+      "peak": 3.98,
+      "loud_db": -11.93
+    },
+    "vine-boom": {
+      "file": "meme/meme-vine-boom.mp3",
+      "start": 0.08,
+      "length": 1.16,
+      "peak": 0.28,
+      "loud_db": -3.47
+    }
+  }
+}
