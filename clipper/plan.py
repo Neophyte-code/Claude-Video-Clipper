@@ -190,32 +190,154 @@ def merge_tokens(words):
     return out
 
 
+# words a caption group shouldn't end on: they lean on the next word ("OH MY | GOD", "FUCKING I | WAS")
+WEAK_END = {'a', 'an', 'the', 'my', 'your', 'his', 'her', 'our', 'their', 'its', 'to', 'of', 'in', 'on',
+            'at', 'for', 'with', 'from', 'by', 'and', 'or', 'but', 'so', 'i', "i'm", 'you', 'we', 'they',
+            'is', 'are', 'was', 'be', 'can', 'will', 'gonna', 'about', 'some', 'this', 'that', 'if', 'oh'}
+
+
+def _split_phrase(ph, max_words, max_chars, max_dur):
+    """Split one phrase into caption groups: fewest groups that fit the limits, then the most even
+    sizes, breaking after commas where possible and never leaving a weak word dangling at a group
+    end or a lone word when it can be avoided (DP over break points)."""
+    n = len(ph)
+
+    def fits(i, j):            # words i..j-1 as one group
+        if j - i == 1:
+            return True
+        chars = sum(len(c['text']) for c in ph[i:j]) + (j - i - 1)
+        # span measured to the last word's onset: one drawn-out shouted word shouldn't split a group
+        return j - i <= max_words and chars <= max_chars and ph[j - 1]['s'] - ph[i]['s'] <= max_dur
+
+    def cost(i, j):
+        c = 100 + (j - i - 2) ** 2                       # fewest groups first, then ~2-3 words each
+        last = ph[j - 1]['raw']
+        if j < n:                                        # inner break: prefer natural ones
+            if last[-1:] in ',;:' or ph[j]['s'] - ph[j - 1]['e'] > 0.25:
+                c -= 6                                   # comma or short pause
+            elif last.lower().strip('.,!?"') in WEAK_END:
+                c += 8
+        if j - i == 1 and n > 1:
+            c += 10                                      # lone word, unless it is the whole phrase
+        return c
+    best = [0.0] + [float('inf')] * n
+    prev = [0] * (n + 1)
+    for j in range(1, n + 1):
+        for i in range(max(0, j - max_words), j):
+            if best[i] < float('inf') and fits(i, j) and best[i] + cost(i, j) < best[j]:
+                best[j], prev[j] = best[i] + cost(i, j), i
+    cuts, j = [], n
+    while j > 0:
+        cuts.append((prev[j], j))
+        j = prev[j]
+    return [ph[i:j] for i, j in reversed(cuts)]
+
+
+def _tok(t):
+    return re.sub(r"[^\w']+", '', t.lower())
+
+
+def apply_fixes(words, fixes):
+    """Correct misheard words from clips.json "fix": [{"from": "give me bed", "to": "give me banned"}].
+    The matched words keep their timing; a different word count is spread over the same span."""
+    words = [dict(w) for w in words]
+    for f in fixes or []:
+        src = [_tok(t) for t in f['from'].split() if _tok(t)]
+        dst = f['to'].split()
+        if not src or not dst:
+            continue
+        i = 0
+        while i + len(src) <= len(words):
+            if [_tok(w['w']) for w in words[i:i + len(src)]] != src:
+                i += 1
+                continue
+            old = words[i:i + len(src)]
+            if len(dst) == len(old):
+                new = [{**o, 'w': d} for o, d in zip(old, dst)]
+            else:
+                s, e = old[0]['s'], old[-1]['e']
+                step = (e - s) / len(dst)
+                new = [{'w': d, 's': round(s + k * step, 3), 'e': round(s + (k + 1) * step, 3), 'p': 1.0}
+                       for k, d in enumerate(dst)]
+            # keep the original punctuation on the last word ("bed," -> "banned,")
+            tail = re.search(r'[.,!?]+$', old[-1]['w'])
+            if tail and not re.search(r'[.,!?]$', new[-1]['w']):
+                new[-1]['w'] += tail.group(0)
+            words[i:i + len(src)] = new
+            i += len(new)
+    return words
+
+
+def tag_groups(meta, upper=True, default_dur=1.2):
+    """Expression tags from clips.json "tags": [{"at": 10.4, "text": "SCREAMS", "dur": 2.8}], with
+    "at" in source seconds, as caption entries (*SCREAMS*) on the clip's timeline."""
+    out, timeline = [], 0.0
+    spans = []
+    for a, b in meta.get('parts', []):
+        spans.append((a, b, timeline))
+        timeline += b - a
+    for t in meta.get('tags', []) or []:
+        at = float(t['at'])
+        span = next(((a, b, off) for a, b, off in spans if a - 0.05 <= at < b), None)
+        if not span:
+            continue
+        a, b, off = span
+        s = at - a + off
+        e = min(s + float(t.get('dur', default_dur)), b - a + off, meta['duration'])
+        text = t['text'].strip('* ')
+        text = f'*{text.upper() if upper else text.lower()}*'
+        out.append({'start': round(s, 3), 'end': round(e, 3), 'tag': True,
+                    'words': [{'text': text, 's': round(s, 3), 'e': round(e, 3), 'emph': False}]})
+    return out
+
+
+def fix_stretched(words, max_len=1.0):
+    """Whisper sometimes stretches a word over the silence next to it ("put" lasting 4 s), which
+    leaves it alone on screen for seconds. Cap words at max_len: a word that runs straight into
+    the next one was said just before it (keep its end), otherwise keep its start."""
+    out = []
+    for k, w in enumerate(words):
+        w = dict(w)
+        if w['e'] - w['s'] > max_len:
+            nxt = words[k + 1] if k + 1 < len(words) else None
+            if nxt and nxt['s'] - w['e'] < 0.1:
+                w['s'] = round(w['e'] - max_len / 2, 3)
+            else:
+                w['e'] = round(w['s'] + max_len, 3)
+        out.append(w)
+    return out
+
+
 def caption_groups(meta, upper=True, max_words=3, max_chars=15, max_dur=1.6):
-    words = merge_tokens(meta['words'])
+    words = fix_stretched(merge_tokens(apply_fixes(meta['words'], meta.get('fix'))))
     splices = meta.get('splices', [])
     emph = {e.lower().strip('.,!?') for e in meta.get('emphasis', [])}
-    groups, cur = [], []
-
-    def flush():
-        if cur:
-            groups.append(cur.copy())
-            cur.clear()
-    for i, w in enumerate(words):
+    # 1) phrases: runs of words between hard breaks (sentence end, pause, splice)
+    phrases, cur = [], []
+    for w in words:
         text = display(w['w'], upper)
         if not text:
             continue
         if cur:
-            chars = sum(len(c['text']) + 1 for c in cur) + len(text)
             gap = w['s'] - cur[-1]['e']
             crosses = any(cur[-1]['e'] <= s <= w['s'] + 0.01 for s in splices)
-            if len(cur) >= max_words or chars > max_chars or gap > 0.35 or \
-                    w['e'] - cur[0]['s'] > max_dur or crosses:
-                flush()
-        cur.append({'text': text, 's': w['s'], 'e': w['e'],
+            if gap > 0.6 or crosses:
+                phrases.append(cur)
+                cur = []
+        cur.append({'text': text, 's': w['s'], 'e': w['e'], 'raw': w['w'],
                     'emph': w['w'].lower().strip('.,!?"') in emph})
         if w['w'][-1:] in '.?!':
-            flush()
-    flush()
+            phrases.append(cur)
+            cur = []
+    if cur:
+        phrases.append(cur)
+    # 2) split each phrase into the fewest groups that fit, balanced, at natural break points
+    groups = []
+    for ph in phrases:
+        groups += _split_phrase(ph, max_words, max_chars, max_dur)
+    for g in groups:
+        for c in g:
+            c.pop('raw', None)
     out = []
     for g, nxt in zip(groups, groups[1:] + [None]):
         end = g[-1]['e'] + 0.25
@@ -366,9 +488,17 @@ def build(meta, brand, opts):
     fps = meta.get('fps', FPS)
     keys, cam, transitions, beats = build_camera(meta) if opts.get('zoom', True) else \
         ([], [[1.0, W / 2, H / 2]] * int(round(meta['duration'] * fps)), [], [(0, meta['duration'])])
-    caps = caption_groups(meta, upper=opts.get('uppercase', True)) if opts.get('captions', True) else []
+    upper = opts.get('uppercase', True)
+    caps = caption_groups(meta, upper=upper) if opts.get('captions', True) else []
+    if caps:
+        caps = sorted(caps + tag_groups(meta, upper), key=lambda c: c['start'])
     if opts.get('caption_y') is None:
         place_on_seam(caps, meta, cam, fps)
+    # a tag that overlaps spoken captions sits one line above them instead of on top of them
+    size = opts.get('size', 96)
+    for c in caps:
+        if c.get('tag') and any(not o.get('tag') and o['start'] < c['end'] and c['start'] < o['end'] for o in caps):
+            c['y'] = int((c.get('y') or opts.get('caption_y') or CAPTION_Y) - size * 1.2)
     return {
         'fps': fps, 'width': W, 'height': H,
         'duration': meta['duration'], 'frames': len(cam),
