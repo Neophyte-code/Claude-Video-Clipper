@@ -96,15 +96,26 @@ def _border(score, lo, hi, thresh):
     return i if score[i] >= thresh else None
 
 
-def _cam_box(gray, face, thresh=10.0):
+def _edges(gray):
+    """(gy, gx) edge maps: gy row i = edge between rows i and i+1, gx likewise for columns."""
+    return np.abs(np.diff(gray, axis=0)), np.abs(np.diff(gray, axis=1))
+
+
+def _peaks(score, lo, hi, thresh):
+    """Indices in score[lo:hi] that are local maxima at or above thresh."""
+    lo, hi = max(lo, 1), min(hi, len(score) - 1)
+    return [i for i in range(lo, hi) if score[i] >= thresh and score[i] >= score[i - 1] and score[i] >= score[i + 1]]
+
+
+def _cam_box(gy, gx, face, thresh=10.0, aspect=(1.2, 1.95)):
     """The overlay rectangle (x, y, w, h) around a small face, found from the straight edges of the
-    overlay's border (the frame edge counts as a border). The top-left corner must show clear
-    edges; the bottom/right edges often blend into the game, so when they are faint the box is
-    completed as 16:9. Returns None if no box fits."""
-    Hs, Ws = gray.shape
+    overlay's border (the frame edge counts as a border). gy/gx are edge maps, ideally averaged
+    over several frames so that moving gameplay edges fade and the fixed overlay border stays.
+    The top-left corner must show clear edges; the right and bottom edges are searched
+    independently (overlays are 4:3 to 16:9, or cropped in between) and the nearest pair of clear
+    edges wins, since stronger edges further out belong to the gameplay. Returns None if no box fits."""
+    Hs, Ws = gy.shape[0] + 1, gx.shape[1] + 1
     fx, fy, fw, fh = face
-    gy = np.abs(np.diff(gray, axis=0))           # horizontal edges, row i = between i and i+1
-    gx = np.abs(np.diff(gray, axis=1))           # vertical edges
     x_lo, x_hi = int(max(0, fx - 1.5 * fw)), int(min(Ws, fx + 2.5 * fw))
     rows = np.percentile(gy[:, x_lo:x_hi], 25, axis=1)
     top = _border(rows, int(fy - 4 * fh), int(fy - 0.2 * fh), thresh)
@@ -116,33 +127,35 @@ def _cam_box(gray, face, thresh=10.0):
     left = 0 if left is None and fx - 6 * fw <= 0 else (None if left is None else left + 1)
     if left is None:
         return None
-    # pick the width whose 16:9 box has the strongest right + bottom edges (frame edges count)
-    rows_ = np.append(rows, 255.0)
-    cols_ = np.append(cols, 255.0)
+    # right / bottom edges: measured along the box's own span (frame edges count, as 255)
+    cols_r = np.append(np.percentile(gx[top:int(min(Hs - 1, fy + 2 * fh)), :], 25, axis=0), 255.0)
+    rows_b = np.append(np.percentile(gy[:, left:int(min(Ws - 1, fx + 1.5 * fw))], 25, axis=1), 255.0)
+    rights = _peaks(cols_r, int(fx + 1.2 * fw), int(min(Ws, left + 0.55 * Ws)) + 1, thresh)
+    bottoms = _peaks(rows_b, int(fy + 1.1 * fh), Hs, thresh)
+    if len(cols_r) - 1 <= left + 0.55 * Ws:
+        rights.append(len(cols_r) - 1)
+    bottoms.append(len(rows_b) - 1)
     cands = []
-    for w in range(int(fx + 1.2 * fw - left), int(min(Ws - left, 0.55 * Ws)) + 1):
-        h = int(round(w * 9 / 16))
-        if top + h > Hs or top + h < fy + 1.1 * fh:
-            continue
-        r, b = left + w - 1, top + h - 1
-        cands.append((cols_[max(r - 1, 0):r + 2].max() + rows_[max(b - 1, 0):b + 2].max(), w, h))
+    for r in rights:
+        for b in bottoms:
+            w, h = r - left + 1, b - top + 1
+            if h > 0 and aspect[0] <= w / h <= aspect[1]:
+                cands.append((cols_r[r] + rows_b[b], w * h, w, h))
     if not cands:
         return None
     top_score = max(c[0] for c in cands)
-    if top_score < thresh:
-        return None
-    # the overlay's own border is the nearest clear edge; stronger edges further out are gameplay
-    _, w, h = next(c for c in cands if c[0] >= max(thresh, 0.6 * top_score))
+    # the overlay's own border is the nearest clear pair of edges; stronger ones further out are gameplay
+    _, _, w, h = min((c for c in cands if c[0] >= 0.6 * top_score), key=lambda c: c[1])
     if w < 0.10 * Ws:
         return None
-    return (left, top, w, h)
+    return (left, top, min(w, Ws - left), min(h, Hs - top))
 
 
 def streamer_cam(cap, t0, t1, samples=7, max_face=0.16):
     """Facecam overlay box in source px for this shot, or None. A small face counts as the
     streamer only if it sits inside a bordered 16:9-ish box that stays put across the shot
     (game characters move, the overlay doesn't)."""
-    boxes = []
+    frames, scale = [], 1.0
     for k in range(samples):
         cap.set(cv2.CAP_PROP_POS_MSEC, (t0 + (t1 - t0) * (k + 0.5) / samples) * 1000)
         ok, frame = cap.read()
@@ -150,12 +163,18 @@ def streamer_cam(cap, t0, t1, samples=7, max_face=0.16):
             continue
         h0, w0 = frame.shape[:2]
         scale = 960 / w0
-        small = cv2.resize(frame, (960, int(h0 * scale)))
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        frames.append(cv2.resize(frame, (960, int(h0 * scale))))
+    if not frames:
+        return None
+    # average the edges over the samples: the overlay border is fixed, gameplay edges move and fade
+    maps = [_edges(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY).astype(np.float32)) for f in frames]
+    gy, gx = np.mean([m[0] for m in maps], axis=0), np.mean([m[1] for m in maps], axis=0)
+    boxes = []
+    for small in frames:
         for f in _faces(small):
             if f[3] / small.shape[0] > max_face:
                 continue
-            b = _cam_box(gray, f)
+            b = _cam_box(gy, gx, f)
             if b:
                 boxes.append(tuple(v / scale for v in b))
     if not boxes:
@@ -271,6 +290,11 @@ def plan_shots(shots, src_w, src_h, min_fit=1.0):
     return plan
 
 
+CAM_CLEAN = 'hqdn3d=1.5:1.5:4:4'           # light denoise before a big upscale
+CAM_SHARPEN = 'unsharp=5:5:0.9:5:5:0'      # restore edge detail after the upscale (luma only)
+SHARPEN = 'unsharp=5:5:0.35:5:5:0'         # gentle sharpening for 1:1 / mild-upscale panels
+
+
 def shot_filter(inp, shot, src_w, src_h, label, fps=FPS):
     """ffmpeg filter chain turning one shot of input `inp` into 1080x1920 [label]."""
     trim = f"trim=start={shot['a']:.3f}:end={shot['b']:.3f},setpts=PTS-STARTPTS"
@@ -289,11 +313,13 @@ def shot_filter(inp, shot, src_w, src_h, label, fps=FPS):
         cx, cy, cw_, ch_ = shot['cam']
         sx, sy, sw_, sh_ = shot['screen']
         top = shot['top_h']
+        # the small facecam is blown up ~3x: denoise first (so compression blocks don't get
+        # magnified), upscale with lanczos, then sharpen. Cheap CPU filters, no AI upscaler.
         return (f"[{inp}]{trim},split[{label}c][{label}s];"
-                f"[{label}c]crop={cw_}:{ch_}:{cx}:{cy},scale={W}:{top}:force_original_aspect_ratio=increase:"
-                f"flags=lanczos,crop={W}:{top}[{label}ct];"
+                f"[{label}c]crop={cw_}:{ch_}:{cx}:{cy},{CAM_CLEAN},scale={W}:{top}:force_original_aspect_ratio=increase:"
+                f"flags=lanczos,crop={W}:{top},{CAM_SHARPEN}[{label}ct];"
                 f"[{label}s]crop={sw_}:{sh_}:{sx}:{sy},scale={W}:{H - top}:force_original_aspect_ratio=increase:"
-                f"flags=lanczos,crop={W}:{H - top}[{label}st];"
+                f"flags=lanczos,crop={W}:{H - top},{SHARPEN}[{label}st];"
                 f"[{label}ct][{label}st]vstack,{tail}[{label}]")
     cw = crop_width(src_w, src_h)
     return (f"[{inp}]{trim},crop={cw}:{src_h}:{shot['x0']}:0,scale={W}:{H}:flags=lanczos,"
